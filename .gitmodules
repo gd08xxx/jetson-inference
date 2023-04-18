@@ -12,7 +12,7 @@
 	branch = master
 [submodule "python/training/detection"]
 	path = python/training/detection
-	url = https://github.com/dusty-nv/pytorch-detection
+	url = https://github.com/gd08xxx/pytorch-detection.git
 	branch = master
 [submodule "python/training/segmentation"]
 	path = python/training/segmentation
