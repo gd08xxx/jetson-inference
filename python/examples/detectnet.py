@@ -83,7 +83,7 @@ while True:
     print("{\n"
             f"\t\"time\": {time.time()}"
             "\t\"objects\": [\n")
-    for index, detection in detections:
+    for index, detection in enumerate(detections):
         class_name = net.GetClassDesc(detection.ClassID)
         left = detection.Left
         top = detection.Top
