@@ -81,7 +81,7 @@ while True:
 
     # MODIFIED
     print("{\n"
-            f"\t\"time\": {time.time()}"
+            f"\t\"time\": {time.time()},"
             "\t\"objects\": [\n")
     for index, detection in enumerate(detections):
         class_name = net.GetClassDesc(detection.ClassID)
@@ -96,7 +96,7 @@ while True:
         confidence = detection.Confidence
         separator = "," if index + 1 == len(detections) else ""
         print(f"\t\t{{\"name\": \"{class_name}\", \"left\": {left}, \"top\": {top}, \"right\": {right}, "
-              f"\"bottom\": {bottom}, \"width\": {width}, \"height\": {height}, \"center\": {center}, "
+              f"\"bottom\": {bottom}, \"width\": {width}, \"height\": {height}, \"center\": \"{center}\", "
               f"\"confidence\": {confidence}}}{separator}\n")
     print("\t]\n}")
 
