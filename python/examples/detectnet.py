@@ -94,7 +94,7 @@ while True:
         area = detection.Area
         center = detection.Center
         confidence = detection.Confidence
-        separator = "," if index + 1 == len(detections) else ""
+        separator = "," if index + 1 != len(detections) else ""
         print(f"\t\t{{\"name\": \"{class_name}\", \"left\": {left}, \"top\": {top}, \"right\": {right}, "
               f"\"bottom\": {bottom}, \"width\": {width}, \"height\": {height}, \"center\": \"{center}\", "
               f"\"confidence\": {confidence}}}{separator}\n")
