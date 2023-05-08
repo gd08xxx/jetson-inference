@@ -23,6 +23,8 @@
 
 import sys
 import argparse
+# MODIFIED
+import time
 
 from jetson_inference import detectNet
 from jetson_utils import videoSource, videoOutput, Log
@@ -76,6 +78,29 @@ while True:
 
     for detection in detections:
         print(detection)
+
+    # MODIFIED
+    print("{\n"
+            f"\t\"time\": {time.time()}"
+            "\t\"objects\": [\n")
+    for index, detection in detections:
+        class_name = net.GetClassDesc(detection.ClassID)
+        left = detection.Left
+        top = detection.Top
+        right = detection.Right
+        bottom = detection.Bottom
+        width = detection.Width
+        height = detection.Height
+        area = detection.Area
+        center = detection.Center
+        confidence = detection.Confidence
+        separator = "," if index + 1 == len(detections) else ""
+        print(f"\t\t{{\"name\": \"{class_name}\", \"left\": {left}, \"top\": {top}, \"right\": {right}, "
+              f"\"bottom\": {bottom}, \"width\": {width}, \"height\": {height}, \"center\": {center}, "
+              f"\"confidence\": {confidence}}}{separator}\n")
+    print("\t]\n}")
+
+    # MODIFIED
 
     # render the image
     output.Render(img)
