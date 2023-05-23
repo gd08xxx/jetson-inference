@@ -25,9 +25,13 @@ import sys
 import argparse
 # MODIFIED
 import time
+# MODIFIED
+import json
 
 from jetson_inference import detectNet
 from jetson_utils import videoSource, videoOutput, Log
+# MODIFIED
+from websocket import create_connection
 
 # parse the command line
 parser = argparse.ArgumentParser(description="Locate objects in a live camera stream using an object detection DNN.", 
@@ -48,6 +52,9 @@ except:
 	print("")
 	parser.print_help()
 	sys.exit(0)
+
+# MODIFIED
+ws = create_connection("ws://localhost:3000/")
 
 # create video sources and outputs
 input = videoSource(args.input, argv=sys.argv)
@@ -80,26 +87,25 @@ while True:
         print(detection)
 
     # MODIFIED
-    print("{\n"
-            f"\t\"time\": {time.time()},"
-            "\t\"objects\": [\n")
+    objects = []
     for index, detection in enumerate(detections):
-        class_name = net.GetClassDesc(detection.ClassID)
-        left = detection.Left
-        top = detection.Top
-        right = detection.Right
-        bottom = detection.Bottom
-        width = detection.Width
-        height = detection.Height
-        area = detection.Area
-        center = detection.Center
-        confidence = detection.Confidence
-        separator = "," if index + 1 != len(detections) else ""
-        print(f"\t\t{{\"name\": \"{class_name}\", \"left\": {left}, \"top\": {top}, \"right\": {right}, "
-              f"\"bottom\": {bottom}, \"width\": {width}, \"height\": {height}, \"center\": \"{center}\", "
-              f"\"confidence\": {confidence}}}{separator}\n")
-    print("\t]\n}")
-
+        objects.append(
+             {
+                  "name": net.GetClassDesc(detection.ClassID),
+                  "left": detection.Left,
+                  "top": detection.Top,
+                  "right": detection.Right,
+                  "bottom": detection.Bottom,
+                  "width": detection.Width,
+                  "height": detection.Height,
+                  "area": detection.Area,
+                  "center": detection.Center,
+                  "confidence": detection.Confidence,
+             }
+        )
+    jsonString = json.dumps({"time": time.time(), "objects": objects}
+    ws.send(jsonString)
+    print(jsonString)
     # MODIFIED
 
     # render the image
@@ -113,4 +119,6 @@ while True:
 
     # exit on input/output EOS
     if not input.IsStreaming() or not output.IsStreaming():
+        # MODIFIED
+        ws.close()
         break
