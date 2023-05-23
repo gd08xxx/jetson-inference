@@ -103,7 +103,7 @@ while True:
                   "confidence": detection.Confidence,
              }
         )
-    jsonString = json.dumps({"time": time.time(), "objects": objects}
+    jsonString = json.dumps({"time": time.time(), "objects": objects})
     ws.send(jsonString)
     print(jsonString)
     # MODIFIED
