@@ -43,6 +43,7 @@ parser.add_argument("output", type=str, default="", nargs='?', help="URI of the 
 parser.add_argument("--network", type=str, default="ssd-mobilenet-v2", help="pre-trained model to load (see below for options)")
 parser.add_argument("--overlay", type=str, default="box,labels,conf", help="detection overlay flags (e.g. --overlay=box,labels,conf)\nvalid combinations are:  'box', 'labels', 'conf', 'none'")
 parser.add_argument("--threshold", type=float, default=0.5, help="minimum detection threshold to use") 
+parser.add_argument("--backend", type=str, default="", help="websocket backend url")
 
 is_headless = ["--headless"] if sys.argv[0].find('console.py') != -1 else [""]
 
@@ -54,7 +55,10 @@ except:
 	sys.exit(0)
 
 # MODIFIED
-ws = create_connection("ws://localhost:3000/")
+ws = None
+
+if len(args.backend) > 0:
+    ws = create_connection(args.backend)
 
 # create video sources and outputs
 input = videoSource(args.input, argv=sys.argv)
@@ -82,9 +86,10 @@ while True:
 
     # print the detections
     print("detected {:d} objects in image".format(len(detections)))
+    print("{:s} | Network {:.0f} FPS".format(args.network, net.GetNetworkFPS()))
 
-    for detection in detections:
-        print(detection)
+    # for detection in detections:
+    #    print(detection)
 
     # MODIFIED
     objects = []
@@ -96,16 +101,20 @@ while True:
                   "top": detection.Top,
                   "right": detection.Right,
                   "bottom": detection.Bottom,
-                  "width": detection.Width,
-                  "height": detection.Height,
-                  "area": detection.Area,
-                  "center": detection.Center,
+                  "w": detection.Width,
+                  "h": detection.Height,
+                  "a": detection.Area,
+                  "x": detection.Center[0],
+                  "y": detection.Center[1],
                   "confidence": detection.Confidence,
              }
         )
     jsonString = json.dumps({"time": time.time(), "objects": objects})
-    ws.send(jsonString)
-    print(jsonString)
+    
+    if ws is not None:
+        ws.send(jsonString)
+    
+    # print(jsonString)
     # MODIFIED
 
     # render the image
@@ -115,10 +124,11 @@ while True:
     output.SetStatus("{:s} | Network {:.0f} FPS".format(args.network, net.GetNetworkFPS()))
 
     # print out performance info
-    net.PrintProfilerTimes()
+    # net.PrintProfilerTimes()
 
     # exit on input/output EOS
     if not input.IsStreaming() or not output.IsStreaming():
         # MODIFIED
-        ws.close()
+        if ws is not None:
+            ws.close()
         break
