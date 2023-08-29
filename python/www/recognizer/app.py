@@ -24,11 +24,12 @@
 import os
 import http
 import flask
+import logging
 import werkzeug
 import argparse
 
 from stream import Stream
-from utils import rest_property, rest_function
+from utils import rest_property, rest_function, alerts
     
     
 parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter, epilog=Stream.usage())
@@ -43,11 +44,13 @@ parser.add_argument("--output", default='webrtc://@:8554/output', type=str, help
 
 parser.add_argument("--data", default='data', type=str, help="path to store dataset and models under")
 parser.add_argument("--network", "--net", default='resnet18', type=str, help="the type of DNN architecture to use (default: resnet18)")
-parser.add_argument('--net-resolution', default=224, type=int, metavar='N', help="the NxN input resolution of the DNN model (default: 224)")
+parser.add_argument('--net-width', default=224, type=int, metavar='N', help="the input width (in pixels) of the DNN model (default: 224)")
+parser.add_argument('--net-height', default=224, type=int, metavar='N', help="the input height (in pixels) of the DNN model (default: 224)")
 parser.add_argument('--batch-size', default=1, type=int, metavar='N', help="training batch size to use (default: 1)")
 parser.add_argument("--workers", default=2, type=int, metavar='N', help="number of training data loading workers (default: 2)")
 parser.add_argument("--optimizer", default='adam', type=str, choices=['adam', 'sgd'], help="training optimizer to use (default: adam)")
 parser.add_argument('--learning-rate', default=0.001, type=float, metavar='LR', help="initial training learning rate (default: 0.001)")     
+parser.add_argument('--no-augmentation', action='store_false', dest='augmentation', help="disable training data image augmentation")
 parser.add_argument('--print-freq', default=10, type=int, metavar='N', help="print training progress info every N steps")
 
 args = parser.parse_known_args()[0]
@@ -64,6 +67,10 @@ def index():
                                  input_stream=args.input, output_stream=args.output,
                                  classification=os.path.basename(stream.model.onnx_path))
 
+@app.route('/alerts', methods=['GET'])
+def get_alerts():
+    return alerts(flask.request.args.get('since', 0, type=int))
+    
 @app.route('/dataset/classes', methods=['GET'])
 def dataset_classes():
     return stream.dataset.classes
@@ -97,6 +104,10 @@ def dataset_upload():
 def training_enabled():
     return rest_property(stream.model, 'training_enabled', bool)
     
+@app.route('/training/stats', methods=['GET'])
+def training_stats():
+    return stream.model.training_stats
+    
 @app.route('/classification/enabled', methods=['GET', 'PUT'])
 def classification_enabled():
     return rest_property(stream.model, 'inference_enabled', bool)
@@ -119,5 +130,8 @@ ssl_context = None
 if args.ssl_cert and args.ssl_key:
     ssl_context = (args.ssl_cert, args.ssl_key)
     
+# disable request logging (https://stackoverflow.com/a/18379764)
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
+
 # start the webserver
 app.run(host=args.host, port=args.port, ssl_context=ssl_context, debug=True, use_reloader=False)

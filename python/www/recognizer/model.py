@@ -22,15 +22,16 @@
 import os
 import time
 import shutil
+import threading
+import traceback
 
 import torch
 import torchvision
-import threading
 
 from jetson_inference import imageNet
 from jetson_utils import cudaFont, cudaAllocMapped, Log
 
-from utils import reshape_model
+from utils import reshape_model, alert
 
 
 class Model(threading.Thread):
@@ -45,10 +46,14 @@ class Model(threading.Thread):
         
         self.args = args
         self.font = cudaFont()
-        self.epochs = 0
-        self.dataset = dataset
-        self.dataloader = None
-        self.best_accuracy = 0.0
+        self.epoch = 0              # current training epoch
+        self.epoch_images = 0       # number of images processed this epoch
+        self.loss = 0.0             # loss so far this epoch
+        self.accuracy = 0.0         # accuracy so far this epoch
+        self.best_accuracy = 0.0    # the best epoch accuracy so far
+        
+        self.dataset = dataset      # reference to the dataset
+        self.dataloader = None      # PyTorch dataloader
         
         self.model_train = None     # PyTorch training model
         self.model_infer = None     # TensorRT inference model
@@ -61,7 +66,7 @@ class Model(threading.Thread):
 
         self.inference_threshold = 0.001
         self.inference_smoothing = 0.0
-        
+ 
         # setup model directory
         self.model_dir = os.path.join(self.args.data, 'models')
         self.best_path = os.path.join(self.model_dir, 'model_best.pth')
@@ -82,8 +87,14 @@ class Model(threading.Thread):
         if not self.inference_enabled or self.model_infer is None:
             return
             
-        self.results = self.model_infer.Classify(img)
+        # returns a list of (classID, confidence) tuples
+        self.results = self.model_infer.Classify(img, topK=0 if self.dataset.multi_label else 1)
 
+        # to trigger custom actions/processing, add them here:
+        # for classID, confidence in self.results:
+        #    if self.model_infer.GetClassLabel(classID) == 'person':              # change for your classes
+        #        print(f"detected a person with {confidence * 100}% confidence")  # do something in response
+        
         return self.results
 
     def Visualize(self, img, results=None):
@@ -95,16 +106,16 @@ class Model(threading.Thread):
             
         if results is None:
             results = self.results
-                
-        if results[0] >= 0:
-            str = f"{results[1] * 100:05.2f}% {self.model_infer.GetClassLabel(results[0])}"
-            self.font.OverlayText(img, img.width, img.height, str, 5, 5, self.font.White, self.font.Gray40)
+        
+        for i, (classID, confidence) in enumerate(results):
+            str = f"{confidence * 100:05.2f}% {self.model_infer.GetClassLabel(classID)}"
+            self.font.OverlayText(img, img.width, img.height, str, 5, 5+(i*37), self.font.White, self.font.Gray40)
         
         return img
-        
-    def run(self):
+       
+    def train(self):
         """
-        Training thread main loop
+        Training thread main loop (assuming dataset can change)
         """
         self.model_train = torchvision.models.__dict__[self.args.network](pretrained=True)
         self.model_train = self.reshape(len(self.dataset.classes))
@@ -124,17 +135,30 @@ class Model(threading.Thread):
         self.load_inference()
 
         # setup data transforms
-        self.dataset.transform = torchvision.transforms.Compose([
-            torchvision.transforms.Resize((self.args.net_resolution, self.args.net_resolution)),
+        transforms = []
+        
+        if self.args.augmentation:
+            transforms = [
+                torchvision.transforms.ColorJitter(0.2, 0.2, 0.2, 0.2),
+                torchvision.transforms.RandomHorizontalFlip()
+            ]
+            
+        transforms += [
+            torchvision.transforms.Resize((self.args.net_height, self.args.net_width)),
             torchvision.transforms.ToTensor(),
             torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+        ]
+        
+        self.dataset.transform = torchvision.transforms.Compose(transforms)
         
         # create loss function
         if self.dataset.multi_label:
             self.criterion = torch.nn.BCEWithLogitsLoss().cuda()
         else:
             self.criterion = torch.nn.CrossEntropyLoss().cuda()
+        
+        # detect if the dataset changed
+        num_images = len(self.dataset)
         
         # training loop
         while True:
@@ -143,13 +167,8 @@ class Model(threading.Thread):
                 time.sleep(1.0)
                 continue
                 
-            print(f"[torch]  training on {len(self.dataset)} images, {len(self.dataset.classes)} classes")
-            print(self.dataset.classes)
-            
-            # reshape the model if the number of classes changed
-            if self.model_train.num_classes != len(self.dataset.classes):
-                self.model_train = self.reshape(len(self.dataset.classes))
-                
+            alert(f"Started training epoch {self.epoch} on {len(self.dataset)} images, {len(self.dataset.classes)} classes")
+ 
             # create the dataloader now that we know there's data
             if self.dataloader is None:    
                 self.dataloader = torch.utils.data.DataLoader(
@@ -157,26 +176,34 @@ class Model(threading.Thread):
                     num_workers=self.args.workers, pin_memory=True)
             
             # train the model for one epoch
-            loss, accuracy = self.train_epoch()
+            self.train_epoch()
             
+            # reset the metrics if the dataset changed
+            if num_images != len(self.dataset):
+                print(f"[torch]  dataset size changed from {num_images} to {len(self.dataset)}")
+                num_images = len(self.dataset)
+                self.best_accuracy = 0.0
+                
             # save the model checkpoints
-            is_best = accuracy > self.best_accuracy
-            self.best_accuracy = max(accuracy, self.best_accuracy)
+            is_best = self.accuracy >= self.best_accuracy
+            self.best_accuracy = max(self.accuracy, self.best_accuracy)
+            
+            alert(f"Done training epoch {self.epoch}, {self.accuracy:.1f}% accuracy {'(new best)' if is_best else ''}")
             
             self.save_checkpoint({
-                'epoch': self.epochs,
+                'epoch': self.epoch,
                 'network': self.args.network,
-                'resolution': self.args.net_resolution,
+                'resolution': (self.args.net_height, self.args.net_width),
                 'classes': self.dataset.classes,
                 'num_classes': len(self.dataset.classes),
                 'multi_label': self.dataset.multi_label,
                 'state_dict': self.model_train.state_dict(),
                 'optimizer': self.optimizer.state_dict(),
-                'accuracy': accuracy,
-                'loss': loss
+                'accuracy': self.accuracy,
+                'loss': self.loss
             }, is_best)
 
-            self.epochs += 1
+            self.epoch += 1
 
     def train_epoch(self):
         """
@@ -186,12 +213,21 @@ class Model(threading.Thread):
         
         acc_sum = 0.0
         loss_sum = 0.0
-        img_count = 0
-        
+        self.epoch_images = 0
+
         for i, (images, target) in enumerate(self.dataloader):
+            # reshape the model if the number of classes changed
+            if self.model_train.num_classes != len(self.dataset.classes):
+                self.model_train = self.reshape(len(self.dataset.classes))
+                self.best_accuracy = 0.0
+                alert(f"Restarting training epoch {self.epoch} (change in number of classes)")
+                return self.train_epoch()
+            
+            # move the tensors to GPU
             images = images.cuda(non_blocking=True)
             target = target.cuda(non_blocking=True)
             
+            # train the image(s)
             output = self.model_train(images)
             loss = self.criterion(output, target)
 
@@ -199,16 +235,21 @@ class Model(threading.Thread):
             loss.backward()
             self.optimizer.step()
            
+            # update metrics
             loss_sum += loss.item() * images.size(0)
             acc_sum += self.compute_accuracy(output, target) * images.size(0)
-            img_count += images.size(0)
-            accuracy = acc_sum / img_count
-            loss = loss_sum / img_count 
             
+            self.epoch_images += images.size(0)
+            self.accuracy = acc_sum / self.epoch_images
+            self.loss = loss_sum / self.epoch_images
+
+            # log updates every N steps (and the last step)
             if (i % self.args.print_freq == 0) or (i == len(self.dataloader)-1):
-                print(f"[torch]  epoch {self.epochs}  [{i}/{len(self.dataloader)}]  loss={loss:.4e}  accuracy={accuracy:.2f}")
-                
-        return loss, accuracy
+                print(f"[torch]  epoch {self.epoch}  [{i}/{len(self.dataloader)}]  loss={self.loss:.4e}  accuracy={self.accuracy:.2f}  {'(multi-tag)' if self.dataset.multi_label else ''}")
+              
+            # the user could disable training mid-epoch
+            if not self.training_enabled:
+                break
         
     def reshape(self, num_classes):
         """
@@ -255,13 +296,14 @@ class Model(threading.Thread):
             self.export_onnx()
             self.load_inference()
         else:
-            print(f"[torch]  saved checkpoint {self.epochs} to {self.checkpoint_path}")
+            print(f"[torch]  saved checkpoint {self.epoch} to {self.checkpoint_path}")
 
     def export_onnx(self):
         """
         Export the PyTorch model to ONNX.
         """
         print(f"[torch]  exporting ONNX to {self.onnx_path}")
+        alert(f"Exporting trained model to {self.onnx_path} (epoch {self.epoch}, {self.accuracy:.1f}% accuracy)")
         
         if self.dataset.multi_label:
             model = torch.nn.Sequential(self.model_train, torch.nn.Sigmoid())
@@ -271,8 +313,8 @@ class Model(threading.Thread):
         model.eval()
         
         torch.onnx.export(
-            self.model_train,
-            torch.ones((1, 3, self.args.net_resolution, self.args.net_resolution)).cuda(),
+            model,
+            torch.ones((1, 3, self.args.net_height, self.args.net_width)).cuda(),
             self.onnx_path,
             input_names=[self.input_layer],
             output_names=[self.output_layer],
@@ -281,6 +323,8 @@ class Model(threading.Thread):
         with open(self.labels_path, 'w') as file:
             file.write('\n'.join(self.dataset.classes))
         
+        alert(f"Exported trained model to {self.onnx_path} (epoch {self.epoch}, {self.accuracy:.1f}% accuracy)", level='success')
+        
     def load_inference(self):
         """
         Load the TensorRT model from ONNX.
@@ -288,11 +332,42 @@ class Model(threading.Thread):
         if not os.path.isfile(self.onnx_path):
             self.export_onnx()
             
+        alert(f"Loading inference model from {self.onnx_path}")    
+        
         self.model_infer = imageNet(model=self.onnx_path, labels=self.labels_path, input_blob=self.input_layer, output_blob=self.output_layer)
-                                    
+                                 
         self.model_infer.SetThreshold(self.inference_threshold)
         self.model_infer.SetSmoothing(self.inference_smoothing)
 
+        alert(f"Loaded inference model from {self.onnx_path}", level='success')  
+        
+    def run(self):
+        """
+        Training thread main loop
+        """
+        try:
+            self.train()
+        except:
+            exc = traceback.format_exc()
+            alert(exc, level='error', category='exception', duration=0)
+            Log.Error(exc)
+            
+    @property
+    def training_stats(self):
+        """
+        Returns a dict containing epoch training progress, model metrics, and dataset statistics.
+        """
+        return {
+            'epoch': self.epoch,         
+            'epoch_images': self.epoch_images,  # current epoch process step (of num_images)
+            'loss': self.loss,
+            'accuracy': self.accuracy,
+            'num_images': len(self.dataset),
+            'num_tags': self.dataset.num_tags,
+            'classes': self.dataset.classes,
+            'class_distribution': self.dataset.class_distribution,
+        }
+ 
     @property
     def classification_threshold(self):
         """

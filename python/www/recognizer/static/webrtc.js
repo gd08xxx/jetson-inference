@@ -29,12 +29,19 @@ function getWebsocketProtocol() {
   return window.location.protocol == 'https:' ? 'wss://' : 'ws://';
 }
 
-function getWebsocketURL(name, port=8554) {
+function getWebsocketURL(name, port=8554) {  // wss://192.168.1.2:8554/name
   return `${getWebsocketProtocol()}${window.location.hostname}:${port}/${name}`;
 }
   
 function checkMediaDevices() {
   return (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !navigator.mediaDevices.enumerateDevices) ? false : true;
+}
+
+function hasConnectionType(type) {  // 'inbound' or 'outbound'
+	for( const connection in connections )
+		if( connections[connection].type == type )
+			return true;
+	return false;
 }
 
 function onIncomingSDP(url, sdp) {
@@ -53,7 +60,16 @@ function onIncomingSDP(url, sdp) {
     connections[url].webrtcPeer.createAnswer().then(onLocalDescription).catch(reportError);
   }
   else if( connections[url].type == 'outbound' ) {
-    var constraints = {'audio': false, 'video': { deviceId: connections[url].deviceId }};
+		const constraints = {
+			audio: false,
+			video: { 
+				/*width: { max: 320 },
+				height: { max: 240 },*/
+				frameRate: { max: 15 },
+				deviceId: connections[url].deviceId,
+			}
+		};
+					
     navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
       console.log('Adding local stream (deviceId=%s)', connections[url].deviceId);
       connections[url].webrtcPeer.addStream(stream);
@@ -196,12 +212,38 @@ function playStream(url, videoElement) {
 function sendStream(url, deviceId) {
   console.log(`sending stream ${url}  (deviceId=${deviceId})`);
 
-  connections[url] = {};
+	if( url in connections && connections[url].type == 'outbound' ) {
+		// replace the outbound stream in the existing connection
+		replaceStream(url, deviceId);
+		return false;
+	}
+	else {
+		// create a new outbound connection
+		connections[url] = {};
 
-  connections[url].type = 'outbound';
-  connections[url].deviceId = deviceId;
-  connections[url].webrtcConfig = { 'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }] };
+		connections[url].type = 'outbound';
+		connections[url].deviceId = deviceId;
+		connections[url].webrtcConfig = { 'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }] };
 
-  connections[url].websocket = new WebSocket(url);
-  connections[url].websocket.addEventListener('message', onServerMessage);
+		connections[url].websocket = new WebSocket(url);
+		connections[url].websocket.addEventListener('message', onServerMessage);
+		
+		return true;
+	}
+}
+
+function replaceStream(url, deviceId) {
+	console.log(`replacing stream for outbound WebRTC connection to ${url}`);
+	console.log(`old device ID:  ${connections[url].deviceId}`);
+	console.log(`new device ID:  ${deviceId}`);
+	
+	var constraints = {'audio': false, 'video': { deviceId: deviceId }};
+	
+	navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
+		const [videoTrack] = stream.getVideoTracks();
+		const sender = connections[url].webrtcPeer.getSenders().find((s) => s.track.kind === videoTrack.kind);
+		console.log('found sender:', sender);
+		sender.replaceTrack(videoTrack);
+		connections[url].deviceId = deviceId;
+	}).catch(reportError);
 }

@@ -42,8 +42,6 @@ parser.add_argument("--overlay", type=str, default="box,labels,conf", help="dete
 parser.add_argument("--threshold", type=float, default=0.5, help="minimum detection threshold to use") 
 parser.add_argument("--backend", type=str, default="", help="websocket backend url")
 
-is_headless = ["--headless"] if sys.argv[0].find('console.py') != -1 else [""]
-
 try:
 	args = parser.parse_known_args()[0]
 except:
@@ -58,7 +56,7 @@ if len(args.backend) > 0:
 
 # create video sources and outputs
 input = videoSource(args.input, argv=sys.argv)
-output = videoOutput(args.output, argv=sys.argv+is_headless)
+output = videoOutput(args.output, argv=sys.argv)
 	
 # load the object detection network
 net = detectNet(args.network, sys.argv, args.threshold)
