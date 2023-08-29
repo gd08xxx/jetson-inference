@@ -23,14 +23,11 @@
 
 import sys
 import argparse
-# MODIFIED
 import time
-# MODIFIED
 import json
 
 from jetson_inference import detectNet
 from jetson_utils import videoSource, videoOutput, Log
-# MODIFIED
 from websocket import create_connection
 
 # parse the command line
@@ -54,7 +51,6 @@ except:
 	parser.print_help()
 	sys.exit(0)
 
-# MODIFIED
 ws = None
 
 if len(args.backend) > 0:
@@ -91,7 +87,6 @@ while True:
     # for detection in detections:
     #    print(detection)
 
-    # MODIFIED
     objects = []
     for index, detection in enumerate(detections):
         objects.append(
@@ -115,7 +110,6 @@ while True:
         ws.send(jsonString)
     
     # print(jsonString)
-    # MODIFIED
 
     # render the image
     output.Render(img)
@@ -128,7 +122,6 @@ while True:
 
     # exit on input/output EOS
     if not input.IsStreaming() or not output.IsStreaming():
-        # MODIFIED
         if ws is not None:
             ws.close()
         break
