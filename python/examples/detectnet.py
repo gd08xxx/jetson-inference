@@ -102,7 +102,7 @@ while True:
                   "confidence": detection.Confidence,
              }
         )
-    jsonString = json.dumps({"time": time.time(), "objects": objects})
+    jsonString = json.dumps({"time": time.time() * 1000, "objects": objects})
     
     if ws is not None:
         ws.send(jsonString)
